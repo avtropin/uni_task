@@ -1,48 +1,28 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker, relationship
-from sqlalchemy import Column, Integer, String, ForeignKey
+from typing import Union
+from time import sleep
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./library.db"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
+from pydantic import BaseModel, constr
 
 
-class Base(DeclarativeBase):
-    pass
+class MLModel():
+    """Симуляция ML-модели"""
+
+    def processing_request(self, request):
+        # создаём видимость обработки полученных данных
+        sleep(5)
+        return request
 
 
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    login = Column(String, nullable=False)
-    password = Column(String, nullable=False)
-    email = Column(String, nullable=False)
+class Book(BaseModel):
+    id: Union[int, None] = None
+    author_id: Union[int, None] = None
+    book_title: Union[constr(max_length=25), None] = None
+    description: Union[constr(max_length=250), None] = None
+    limit: Union[int, None] = None
 
 
-class Author(Base):
-    __tablename__ = "authors"
-    id = Column(Integer, primary_key=True, index=True)
-    fio = Column(String, nullable=False)
-    biography = Column(String)
-    books = relationship(
-        "Book",
-        back_populates="author",
-        cascade="all, delete-orphan"
-        )
-
-
-class Book(Base):
-    __tablename__ = "books"
-    id = Column(Integer, primary_key=True, index=True)
-    author_id = Column(Integer, ForeignKey("authors.id"), nullable=False, )
-    author = relationship("Author", back_populates="books")
-    book_title = Column(String, nullable=False)
-    description = Column(String)
-
-
-Base.metadata.create_all(bind=engine)
-
-SessionLocal = sessionmaker(autoflush=False, bind=engine)
+class Author(BaseModel):
+    id: Union[int, None] = None
+    fio: Union[constr(max_length=25), None] = None
+    biography: Union[constr(max_length=250), None] = None
+    limit: Union[int, None] = None
