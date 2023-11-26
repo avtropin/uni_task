@@ -1,20 +1,33 @@
 import json
 
+import redis
+
 from fastapi import FastAPI
 
 from database.operations import (db_get_books, db_new_book_add,
                                  db_change_author_book, db_delete_book,
                                  db_get_authors, db_new_authors_add)
-from models import MLModel, Book, Author
+from models import Book, Author
+from backtasks import processing_request
 
 BOOKS_LIMIT = 10
 AUTHORS_LIMIT = 10
+
+tasks_list = []
 
 app = FastAPI(
     title="Library"
 )
 
-ml_model = MLModel()
+
+@app.get("/")
+def cel_res():
+    dist_obj_in = {
+        "test": "ok"
+    }
+    json_obj_in = json.dumps(dist_obj_in, indent=4)
+    status = processing_request.delay(json_obj_in)
+    return status.id
 
 
 def serial_processing_deserial_book(book: Book):
@@ -23,10 +36,19 @@ def serial_processing_deserial_book(book: Book):
     json_obj_in = json.dumps(book.model_dump(), indent=4)
     # передаём данные в формате json в симуляцию ML-модели и получаем
     # данные из модели в том же формате
-    json_obj_out = ml_model.processing_request(json_obj_in)
+    json_obj_out = processing_request(json_obj_in)
     # десериализация из json
     data_dict_out = json.loads(json_obj_out)
     return Book(**data_dict_out)
+
+
+def serial_processing_book(book: Book, task_type: str = "root"):
+    """Сериализация и отправка на обработку данных в ML-модель"""
+    # сериализация в json
+    json_obj_in = json.dumps(book.model_dump(), indent=4)
+    # передаём данные в формате json в симуляцию ML-модели
+    response = processing_request.delay(json_obj_in, task_type)
+    return response.id
 
 
 def serial_processing_deserial_author(author: Author):
@@ -35,21 +57,41 @@ def serial_processing_deserial_author(author: Author):
     json_obj_in = json.dumps(author.model_dump(), indent=4)
     # передаём данные в формате json в симуляцию ML-модели и получаем
     # данные из модели в том же формате
-    json_obj_out = ml_model.processing_request(json_obj_in)
+    json_obj_out = processing_request(json_obj_in)
     # десериализация из json
     data_dict_out = json.loads(json_obj_out)
     return Author(**data_dict_out)
 
 
+@app.get("/processing")
+def processing_tasks_user():
+    """Запрос информации по выполнению задач"""
+    if tasks_list == []:
+        return False
+    pattern_str = tasks_list.pop()
+    r = redis.Redis("localhost", 6379)
+    string = r.get((r.keys(pattern=f"*{pattern_str}*"))[0])
+    string_json = json.loads(string)
+    task_type = string_json["result"]["task_type"]
+    data = json.loads(string_json["result"]["request"])
+    if task_type == "get_books":
+        book_out = Book(**data)
+        return {"task_type": task_type,
+                "result": db_get_books(book_out.limit)}
+    return {"task_type": task_type,
+            "result": data}
+
+
 @app.get("/books")
 def get_books(limit: int = BOOKS_LIMIT):
-    """Выводим последние добавленные в библиотеку книги."""
+    """Запрашиваем последние добавленные в библиотеку книги."""
     # создаём обьект класса Book здесь, т.к.
     # request with GET/HEAD method cannot have body
     book = Book()
     book.limit = limit
-    book_out = serial_processing_deserial_book(book)
-    return db_get_books(book_out.limit)
+    response = serial_processing_book(book, "get_books")
+    tasks_list.append(response)
+    return {"task_id": response}
 
 
 @app.post("/books")
