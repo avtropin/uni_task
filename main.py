@@ -1,7 +1,6 @@
 import json
 
-import redis
-
+from redis import Redis
 from fastapi import FastAPI
 
 from database.operations import (db_get_books, db_new_book_add,
@@ -13,54 +12,52 @@ from backtasks import processing_request
 BOOKS_LIMIT = 10
 AUTHORS_LIMIT = 10
 
-tasks_list = []
+tasks_list = []  # имитация хранения списка ключей запросов на стороне клиента
+
+# список задач, заданный в порядке приоритетности
+dict_task_type = {
+    "del": [],  # задачи на удаление
+    "put": [],  # задачи на изменение
+    "pos": [],  # задачи на добавление
+    "get": []  # задачи на запрос данных
+}
+
 
 app = FastAPI(
     title="Library"
 )
 
 
-@app.get("/")
-def cel_res():
-    dist_obj_in = {
-        "test": "ok"
-    }
-    json_obj_in = json.dumps(dist_obj_in, indent=4)
-    status = processing_request.delay(json_obj_in)
-    return status.id
+def grouping_by_queries(task_type: str, data):
+    """Группируем по запросам"""
+    dict_task_type[task_type[0:3]].append({"task_type": task_type,
+                                           "data": data})
 
 
-def serial_processing_deserial_book(book: Book):
-    """Сериализация, обработка, и десериализация полученных данных"""
-    # сериализация в json
-    json_obj_in = json.dumps(book.model_dump(), indent=4)
-    # передаём данные в формате json в симуляцию ML-модели и получаем
-    # данные из модели в том же формате
-    json_obj_out = processing_request(json_obj_in)
-    # десериализация из json
-    data_dict_out = json.loads(json_obj_out)
-    return Book(**data_dict_out)
+def prioritization_of_tasks():
+    """Запускаем задачи на обработку в ML-модель согласно приоритетам"""
+    for key in dict_task_type.keys():
+        while dict_task_type[key] != []:
+            data_task = dict_task_type[key].pop()
+            response = processing_request.delay(data_task["data"],
+                                                data_task["task_type"])
+            tasks_list.append(response.id)
 
 
 def serial_processing_book(book: Book, task_type: str = "root"):
-    """Сериализация и отправка на обработку данных в ML-модель"""
+    """Сериализация и отправка на группировку"""
     # сериализация в json
     json_obj_in = json.dumps(book.model_dump(), indent=4)
-    # передаём данные в формате json в симуляцию ML-модели
-    response = processing_request.delay(json_obj_in, task_type)
-    return response.id
+    # отправляем на группировку по запросам
+    grouping_by_queries(task_type, json_obj_in)
 
 
-def serial_processing_deserial_author(author: Author):
-    """Сериализация, обработка, и десериализация полученных данных"""
+def serial_processing_author(author: Author, task_type: str = "root"):
+    """Сериализация и отправка на обработку данных в ML-модель"""
     # сериализация в json
     json_obj_in = json.dumps(author.model_dump(), indent=4)
-    # передаём данные в формате json в симуляцию ML-модели и получаем
-    # данные из модели в том же формате
-    json_obj_out = processing_request(json_obj_in)
-    # десериализация из json
-    data_dict_out = json.loads(json_obj_out)
-    return Author(**data_dict_out)
+    # отправляем на группировку по запросам
+    grouping_by_queries(task_type, json_obj_in)
 
 
 @app.get("/processing")
@@ -68,18 +65,56 @@ def processing_tasks_user():
     """Запрос информации по выполнению задач"""
     if tasks_list == []:
         return False
-    pattern_str = tasks_list.pop()
-    r = redis.Redis("localhost", 6379)
-    string = r.get((r.keys(pattern=f"*{pattern_str}*"))[0])
-    string_json = json.loads(string)
-    task_type = string_json["result"]["task_type"]
-    data = json.loads(string_json["result"]["request"])
-    if task_type == "get_books":
-        book_out = Book(**data)
-        return {"task_type": task_type,
-                "result": db_get_books(book_out.limit)}
-    return {"task_type": task_type,
-            "result": data}
+    list_task_complete = []
+    while tasks_list != []:
+        pattern_str = tasks_list.pop()
+        r = Redis("localhost", 6379)
+        try:
+            string = r.get((r.keys(pattern=f"*{pattern_str}*"))[0])
+        except Exception:
+            tasks_list.append(pattern_str)
+            continue
+        string_json = json.loads(string)
+        task_type = string_json["result"]["task_type"]
+        data = json.loads(string_json["result"]["request"])
+        if task_type == "get_books":
+            book_out = Book(**data)
+            list_task_complete.append({
+                "task_type": task_type,
+                "result": db_get_books(book_out.limit)})
+        if task_type == "post_new_book_add":
+            book_out = Book(**data)
+            list_task_complete.append({
+                "task_type": task_type,
+                "result": db_new_book_add(book_out.author_id,
+                                          book_out.book_title,
+                                          book_out.description)})
+        if task_type == "put_сhange_author_book":
+            book_out = Book(**data)
+            list_task_complete.append({
+                "task_type": task_type,
+                "result": db_change_author_book(book_out.id,
+                                                book_out.author_id)})
+        if task_type == "delete_book":
+            book_out = Book(**data)
+            list_task_complete.append({
+                "task_type": task_type,
+                "result": db_delete_book(book_out.id)})
+        if task_type == "get_authors":
+            author_out = Author(**data)
+            list_task_complete.append({
+                "task_type": task_type,
+                "result": db_get_authors(author_out.limit)})
+        if task_type == "post_new_authors_add":
+            author_out = Author(**data)
+            list_task_complete.append({
+                "task_type": task_type,
+                "result": db_new_authors_add(author_out.fio,
+                                             author_out.biography)})
+        if task_type == "root":
+            list_task_complete.append({"task_type": task_type,
+                                       "result": data})
+    return list_task_complete
 
 
 @app.get("/books")
@@ -89,9 +124,9 @@ def get_books(limit: int = BOOKS_LIMIT):
     # request with GET/HEAD method cannot have body
     book = Book()
     book.limit = limit
-    response = serial_processing_book(book, "get_books")
-    tasks_list.append(response)
-    return {"task_id": response}
+    serial_processing_book(book, "get_books")
+    prioritization_of_tasks()
+    return {"status": "ok"}
 
 
 @app.post("/books")
@@ -101,9 +136,9 @@ def new_book_add(book: Book, author_id: int, book_title: str,
     book.author_id = author_id
     book.book_title = book_title
     book.description = description
-    book_out = serial_processing_deserial_book(book)
-    return db_new_book_add(book_out.author_id, book_out.book_title,
-                           book_out.description)
+    serial_processing_book(book, "post_new_book_add")
+    prioritization_of_tasks()
+    return {"status": "ok"}
 
 
 @app.put("/books")
@@ -111,16 +146,18 @@ def сhange_author_book(book: Book, book_id: int, new_autor_id: int):
     """Меняем автора книги по id книги."""
     book.id = book_id
     book.author_id = new_autor_id
-    book_out = serial_processing_deserial_book(book)
-    return db_change_author_book(book_out.id, book_out.author_id)
+    serial_processing_book(book, "put_сhange_author_book")
+    prioritization_of_tasks()
+    return {"status": "ok"}
 
 
 @app.delete("/books")
 def delete_book(book: Book, id: int):
     """Удаляем книгу по id книги."""
     book.id = id
-    book_out = serial_processing_deserial_book(book)
-    return db_delete_book(book_out.id)
+    serial_processing_book(book, "delete_book")
+    prioritization_of_tasks()
+    return {"status": "ok"}
 
 
 @app.get("/authors")
@@ -128,8 +165,9 @@ def get_authors(limit: int = AUTHORS_LIMIT):
     """Выводим последних добавленных авторов."""
     author = Author()
     author.limit = limit
-    author_out = serial_processing_deserial_author(author)
-    return db_get_authors(author_out.limit)
+    serial_processing_author(author, "get_authors")
+    prioritization_of_tasks()
+    return {"status": "ok"}
 
 
 @app.post("/authors")
@@ -137,5 +175,6 @@ def new_authors_add(author: Author, fio: str, biography: str):
     """Добавляем нового автора."""
     author.fio = fio
     author.biography = biography
-    author_out = serial_processing_deserial_author(author)
-    return db_new_authors_add(author_out.fio, author_out.biography)
+    serial_processing_author(author, "post_new_authors_add")
+    prioritization_of_tasks()
+    return {"status": "ok"}
