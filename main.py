@@ -68,7 +68,7 @@ def processing_tasks_user():
     list_task_complete = []
     while tasks_list != []:
         pattern_str = tasks_list.pop()
-        r = Redis("localhost", 6379)
+        r = Redis("uni_task-redis-1", 6379)
         try:
             string = r.get((r.keys(pattern=f"*{pattern_str}*"))[0])
         except Exception:

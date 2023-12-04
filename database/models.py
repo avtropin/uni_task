@@ -2,12 +2,24 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, relationship
 from sqlalchemy import Column, Integer, String, ForeignKey
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./library.db"
+DB_HOST = "uni_task-bd-1"
+# DB_HOST = "localhost"
+DB_PORT = "5432"
+DB_NAME = "postgres"
+DB_USER = "postgres"
+DB_PASS = "postgres"
+
+DATABASE_URL = (f"postgresql://{DB_USER}:{DB_PASS}"
+                f"@{DB_HOST}:{DB_PORT}/{DB_NAME}")
+
+engine = create_engine(DATABASE_URL)
+
+"""SQLALCHEMY_DATABASE_URL = "sqlite:///./library.db"
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     connect_args={"check_same_thread": False}
-)
+)"""
 
 
 class Base(DeclarativeBase):
